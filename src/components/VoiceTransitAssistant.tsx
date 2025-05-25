@@ -79,14 +79,14 @@ const VoiceTransitAssistant = () => {
     setIsProcessing(true);
     
     try {
-      const parsedQuery = parseTransitQuery(query);
+      const parsedQuery = await parseTransitQueryWithGemini(query);
       
       if (parsedQuery.origin && parsedQuery.destination) {
         const transitData = await fetchTransitData(parsedQuery.origin, parsedQuery.destination);
         
         if (transitData.length > 0) {
           setTransitResults(transitData);
-          const responseText = await generateResponse(transitData, selectedLanguage);
+          const responseText = await generateResponseWithGemini(transitData, selectedLanguage);
           setResponse(responseText);
           await speakResponse(responseText);
         } else {
@@ -115,8 +115,55 @@ const VoiceTransitAssistant = () => {
     }
   };
 
-  const parseTransitQuery = (query: string) => {
-    // Simple parsing logic for demo - in production, use more sophisticated NLP
+  const parseTransitQueryWithGemini = async (query: string) => {
+    try {
+      const GEMINI_API_KEY = 'AIzaSyBgd_nKRxaj3guXuOd40040-Hs4uJFgUNI';
+      
+      const prompt = `Parse this transit query and extract origin and destination locations. 
+      Query: "${query}"
+      
+      Please respond with only a JSON object in this exact format:
+      {"origin": "location1", "destination": "location2"}
+      
+      If you cannot identify both locations, use empty strings.`;
+
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: prompt
+            }]
+          }]
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const textResponse = data.candidates[0].content.parts[0].text;
+        
+        try {
+          const parsed = JSON.parse(textResponse);
+          return { origin: parsed.origin || '', destination: parsed.destination || '' };
+        } catch {
+          // Fallback to simple parsing
+          return parseTransitQueryFallback(query);
+        }
+      } else {
+        console.error('Gemini API error:', await response.text());
+        return parseTransitQueryFallback(query);
+      }
+    } catch (error) {
+      console.error('Error with Gemini API:', error);
+      return parseTransitQueryFallback(query);
+    }
+  };
+
+  const parseTransitQueryFallback = (query: string) => {
+    // Simple parsing logic for fallback
     const lowerQuery = query.toLowerCase();
     let origin = '';
     let destination = '';
@@ -141,38 +188,40 @@ const VoiceTransitAssistant = () => {
   };
 
   const fetchTransitData = async (origin: string, destination: string): Promise<TransitResult[]> => {
-    const API_KEY = 'AIzaSyA958dR9M1_2nML9OkxPk2e2eYZ_07XbBg';
-    
     try {
-      // Use Google Maps JavaScript API with JSONP to avoid CORS
-      const directionsService = new google.maps.DirectionsService();
+      // Wait for Google Maps to load
+      if (!window.google) {
+        throw new Error('Google Maps not loaded');
+      }
+
+      const directionsService = new window.google.maps.DirectionsService();
       
-      const request = {
+      const request: google.maps.DirectionsRequest = {
         origin: origin,
         destination: destination,
-        travelMode: google.maps.TravelMode.TRANSIT,
+        travelMode: window.google.maps.TravelMode.TRANSIT,
         transitOptions: {
-          modes: [google.maps.TransitMode.BUS],
+          modes: [window.google.maps.TransitMode.BUS],
           departureTime: new Date()
         },
-        unitSystem: google.maps.UnitSystem.METRIC,
+        unitSystem: window.google.maps.UnitSystem.METRIC,
         region: 'IN'
       };
 
       return new Promise((resolve, reject) => {
         directionsService.route(request, (result, status) => {
-          if (status === google.maps.DirectionsStatus.OK && result) {
+          if (status === window.google.maps.DirectionsStatus.OK && result) {
             const routes = result.routes;
             if (routes && routes.length > 0) {
               const transitResults: TransitResult[] = [];
               
               routes[0].legs.forEach(leg => {
                 leg.steps.forEach(step => {
-                  if (step.travel_mode === google.maps.TravelMode.TRANSIT && 
+                  if (step.travel_mode === window.google.maps.TravelMode.TRANSIT && 
                       step.transit && 
                       step.transit.line && 
                       step.transit.line.vehicle && 
-                      step.transit.line.vehicle.type === google.maps.VehicleType.BUS) {
+                      step.transit.line.vehicle.type === window.google.maps.VehicleType.BUS) {
                     
                     transitResults.push({
                       busNumber: step.transit.line.short_name || step.transit.line.name || 'N/A',
@@ -204,58 +253,76 @@ const VoiceTransitAssistant = () => {
     }
   };
 
-  const generateResponse = async (transitData: TransitResult[], language: string): Promise<string> => {
-    if (transitData.length === 0) {
-      return language === 'hi' 
-        ? "माफ करें, कोई बस मार्ग नहीं मिला।"
-        : "Sorry, no bus routes found.";
-    }
-    
-    const result = transitData[0];
-    
-    if (language === 'hi') {
-      return `बस नंबर ${result.busNumber} ${result.departureTime} में ${result.from} से छूटेगी। ${result.to} तक पहुंचने में ${result.duration} लगेंगे। इस रूट में कुल ${result.stops} स्टॉप हैं।`;
-    } else {
-      return `Bus number ${result.busNumber} will arrive in ${result.departureTime} from ${result.from}. It will take ${result.duration} to reach ${result.to} with ${result.stops} stops.`;
+  const generateResponseWithGemini = async (transitData: TransitResult[], language: string): Promise<string> => {
+    try {
+      const GEMINI_API_KEY = 'AIzaSyBgd_nKRxaj3guXuOd40040-Hs4uJFgUNI';
+      
+      if (transitData.length === 0) {
+        return language === 'hi' 
+          ? "माफ करें, कोई बस मार्ग नहीं मिला।"
+          : "Sorry, no bus routes found.";
+      }
+      
+      const result = transitData[0];
+      const prompt = `Generate a natural response about this bus route information in ${language === 'hi' ? 'Hindi' : 'English'}:
+      
+      Bus Number: ${result.busNumber}
+      From: ${result.from}
+      To: ${result.to}
+      Departure Time: ${result.departureTime}
+      Duration: ${result.duration}
+      Stops: ${result.stops}
+      
+      Make it sound natural and conversational, like a helpful assistant.`;
+
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: prompt
+            }]
+          }]
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        return data.candidates[0].content.parts[0].text;
+      } else {
+        console.error('Gemini API error:', await response.text());
+        // Fallback response
+        if (language === 'hi') {
+          return `बस नंबर ${result.busNumber} ${result.departureTime} में ${result.from} से छूटेगी। ${result.to} तक पहुंचने में ${result.duration} लगेंगे। इस रूट में कुल ${result.stops} स्टॉप हैं।`;
+        } else {
+          return `Bus number ${result.busNumber} will arrive in ${result.departureTime} from ${result.from}. It will take ${result.duration} to reach ${result.to} with ${result.stops} stops.`;
+        }
+      }
+    } catch (error) {
+      console.error('Error with Gemini API:', error);
+      // Fallback response
+      const result = transitData[0];
+      if (language === 'hi') {
+        return `बस नंबर ${result.busNumber} ${result.departureTime} में ${result.from} से छूटेगी। ${result.to} तक पहुंचने में ${result.duration} लगेंगे। इस रूट में कुल ${result.stops} स्टॉप हैं।`;
+      } else {
+        return `Bus number ${result.busNumber} will arrive in ${result.departureTime} from ${result.from}. It will take ${result.duration} to reach ${result.to} with ${result.stops} stops.`;
+      }
     }
   };
 
   const speakResponse = async (text: string) => {
     try {
-      const DWANI_API_KEY = 'priyanshus.22.becs@acharya.ac.in_dwani';
-      const DWANI_API_BASE_URL = 'https://dwani-dwani-api.hf.space';
-      
-      const response = await fetch(`${DWANI_API_BASE_URL}/tts`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': DWANI_API_KEY
-        },
-        body: JSON.stringify({
-          text: text,
-          language: selectedLanguage,
-          voice: selectedLanguage === 'hi' ? 'hindi_female' : 'english_female'
-        })
-      });
-      
-      if (response.ok) {
-        const audioBlob = await response.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
-        const audio = new Audio(audioUrl);
-        await audio.play();
-      } else {
-        console.error('Dwani API error:', await response.text());
-        // Fallback to browser TTS
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = selectedLanguage === 'hi' ? 'hi-IN' : 'en-IN';
-        speechSynthesis.speak(utterance);
-      }
-    } catch (error) {
-      console.error('Error with TTS:', error);
-      // Fallback to browser TTS
+      // Use browser's built-in speech synthesis
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = selectedLanguage === 'hi' ? 'hi-IN' : 'en-IN';
+      utterance.rate = 0.9;
+      utterance.pitch = 1;
       speechSynthesis.speak(utterance);
+    } catch (error) {
+      console.error('Error with TTS:', error);
     }
   };
 
