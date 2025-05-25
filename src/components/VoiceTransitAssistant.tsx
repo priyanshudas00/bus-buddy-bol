@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -19,7 +18,7 @@ const VoiceTransitAssistant = () => {
   const [transcript, setTranscript] = useState('');
   const [response, setResponse] = useState('');
   const [transitResults, setTransitResults] = useState<TransitResult[]>([]);
-  const [selectedLanguage, setSelectedLanguage] = useState('hi'); // Default to Hindi
+  const [selectedLanguage, setSelectedLanguage] = useState('hi');
   const recognitionRef = useRef<any>(null);
   const { toast } = useToast();
 
@@ -65,6 +64,7 @@ const VoiceTransitAssistant = () => {
     if (recognitionRef.current) {
       setTranscript('');
       setResponse('');
+      setTransitResults([]);
       recognitionRef.current.start();
     } else {
       toast({
@@ -79,20 +79,23 @@ const VoiceTransitAssistant = () => {
     setIsProcessing(true);
     
     try {
-      // Parse the query to extract origin and destination
       const parsedQuery = parseTransitQuery(query);
       
       if (parsedQuery.origin && parsedQuery.destination) {
-        // Fetch transit data from Google Maps API
         const transitData = await fetchTransitData(parsedQuery.origin, parsedQuery.destination);
-        setTransitResults(transitData);
         
-        // Generate response using Dwani API
-        const responseText = await generateResponse(transitData, selectedLanguage);
-        setResponse(responseText);
-        
-        // Speak the response
-        await speakResponse(responseText);
+        if (transitData.length > 0) {
+          setTransitResults(transitData);
+          const responseText = await generateResponse(transitData, selectedLanguage);
+          setResponse(responseText);
+          await speakResponse(responseText);
+        } else {
+          const noRouteMessage = selectedLanguage === 'hi' 
+            ? "माफ करें, इस रूट के लिए कोई बस सेवा नहीं मिली।"
+            : "Sorry, no bus service found for this route.";
+          setResponse(noRouteMessage);
+          await speakResponse(noRouteMessage);
+        }
       } else {
         const errorMessage = selectedLanguage === 'hi' 
           ? "कृपया शुरुआती स्थान और गंतव्य दोनों बताएं"
@@ -103,8 +106,8 @@ const VoiceTransitAssistant = () => {
     } catch (error) {
       console.error('Error processing query:', error);
       const errorMessage = selectedLanguage === 'hi'
-        ? "माफ करें, कुछ गलत हुआ है। कृपया दोबारा कोशिश करें।"
-        : "Sorry, something went wrong. Please try again.";
+        ? "माफ करें, डेटा लाने में समस्या हुई है। कृपया दोबारा कोशिश करें।"
+        : "Sorry, there was an issue fetching data. Please try again.";
       setResponse(errorMessage);
       await speakResponse(errorMessage);
     } finally {
@@ -139,48 +142,65 @@ const VoiceTransitAssistant = () => {
 
   const fetchTransitData = async (origin: string, destination: string): Promise<TransitResult[]> => {
     const API_KEY = 'AIzaSyA958dR9M1_2nML9OkxPk2e2eYZ_07XbBg';
-    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&mode=transit&transit_mode=bus&departure_time=now&key=${API_KEY}`;
     
     try {
-      const response = await fetch(url);
-      const data = await response.json();
+      // Use Google Maps JavaScript API with JSONP to avoid CORS
+      const directionsService = new google.maps.DirectionsService();
       
-      if (data.routes && data.routes.length > 0) {
-        const route = data.routes[0];
-        const leg = route.legs[0];
-        
-        const transitSteps = leg.steps.filter((step: any) => step.travel_mode === 'TRANSIT');
-        
-        return transitSteps.map((step: any) => ({
-          busNumber: step.transit_details?.line?.short_name || 'N/A',
-          from: step.transit_details?.departure_stop?.name || origin,
-          to: step.transit_details?.arrival_stop?.name || destination,
-          departureTime: step.transit_details?.departure_time?.text || 'Now',
-          duration: leg.duration?.text || 'Unknown',
-          stops: step.transit_details?.num_stops || 0
-        }));
-      }
+      const request = {
+        origin: origin,
+        destination: destination,
+        travelMode: google.maps.TravelMode.TRANSIT,
+        transitOptions: {
+          modes: [google.maps.TransitMode.BUS],
+          departureTime: new Date()
+        },
+        unitSystem: google.maps.UnitSystem.METRIC,
+        region: 'IN'
+      };
+
+      return new Promise((resolve, reject) => {
+        directionsService.route(request, (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            const routes = result.routes;
+            if (routes && routes.length > 0) {
+              const transitResults: TransitResult[] = [];
+              
+              routes[0].legs.forEach(leg => {
+                leg.steps.forEach(step => {
+                  if (step.travel_mode === google.maps.TravelMode.TRANSIT && 
+                      step.transit && 
+                      step.transit.line && 
+                      step.transit.line.vehicle && 
+                      step.transit.line.vehicle.type === google.maps.VehicleType.BUS) {
+                    
+                    transitResults.push({
+                      busNumber: step.transit.line.short_name || step.transit.line.name || 'N/A',
+                      from: step.transit.departure_stop.name,
+                      to: step.transit.arrival_stop.name,
+                      departureTime: step.transit.departure_time.text,
+                      duration: step.duration.text,
+                      stops: step.transit.num_stops || 0
+                    });
+                  }
+                });
+              });
+              
+              resolve(transitResults);
+            } else {
+              console.log('No routes found');
+              resolve([]);
+            }
+          } else {
+            console.error('Directions request failed:', status);
+            resolve([]);
+          }
+        });
+      });
       
-      // Fallback mock data for demo
-      return [{
-        busNumber: '228C',
-        from: origin,
-        to: destination,
-        departureTime: '5 mins',
-        duration: '14 mins',
-        stops: 3
-      }];
     } catch (error) {
-      console.error('Error fetching transit data:', error);
-      // Return mock data for demo
-      return [{
-        busNumber: '228C',
-        from: origin,
-        to: destination,
-        departureTime: '5 mins',
-        duration: '14 mins',
-        stops: 3
-      }];
+      console.error('Error with Google Maps API:', error);
+      throw new Error('Failed to fetch transit data');
     }
   };
 
@@ -202,7 +222,6 @@ const VoiceTransitAssistant = () => {
 
   const speakResponse = async (text: string) => {
     try {
-      // Use Dwani API for text-to-speech
       const DWANI_API_KEY = 'priyanshus.22.becs@acharya.ac.in_dwani';
       const DWANI_API_BASE_URL = 'https://dwani-dwani-api.hf.space';
       
@@ -210,7 +229,7 @@ const VoiceTransitAssistant = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${DWANI_API_KEY}`
+          'X-API-Key': DWANI_API_KEY
         },
         body: JSON.stringify({
           text: text,
@@ -225,6 +244,7 @@ const VoiceTransitAssistant = () => {
         const audio = new Audio(audioUrl);
         await audio.play();
       } else {
+        console.error('Dwani API error:', await response.text());
         // Fallback to browser TTS
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = selectedLanguage === 'hi' ? 'hi-IN' : 'en-IN';
