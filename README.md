@@ -21,13 +21,9 @@
 ├── tsconfig.json # TypeScript config
 ├── vite.config.ts # Vite config
 
-bash
-Copy
-Edit
 
 ## 🛠️ Installation
 
-```bash
 # Clone the repository
 git clone https://github.com/priyanshudas00/bus-buddy-bol.git
 cd bus-buddy-bol
@@ -38,9 +34,6 @@ npm install
 # Run development server
 npm run dev
 📦 Build
-bash
-Copy
-Edit
 npm run build
 👨‍💻 Contributing
 Pull requests are welcome! Feel free to open issues or suggest features.
@@ -48,9 +41,6 @@ Pull requests are welcome! Feel free to open issues or suggest features.
 📄 License
 This project is licensed under the MIT License – see the LICENSE file for details.
 
-sql
-Copy
-Edit
 
 ---
 
